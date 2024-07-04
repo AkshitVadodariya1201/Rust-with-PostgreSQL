@@ -1,62 +1,82 @@
-use sqlx::postgres::{PgPoolOptions, PgRow};
-use sqlx::{FromRow, Row};
+use postgres::{Client, Error, NoTls};
+use std::collections::HashMap;
 
-#[derive(Debug, FromRow)]
-struct Ticket {
-    id: i64,
+struct Author {
+    _id: i32,
     name: String,
+    country: String,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), sqlx::Error> {
-    // 1) Create a connection pool
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect("postgres://postgres:welcome@localhost/postgres")
-        .await?;
+// struct Nation {
+//     nationality: String,
+//     count: i64,
+// }
 
-    // 2) Create table if not exist yet
-    sqlx::query(
-        r#"
-            CREATE TABLE IF NOT EXISTS ticket (
-            id bigserial,
-            name text
-            );
-            "#,
-    )
-    .execute(&pool)
-    .await?;
+fn main() -> Result<(), Error> {
+    let mut client = Client::connect("postgresql://akpatel:akpatel@localhost/library", NoTls)?;
 
-    // 3) Insert a new ticket
-    let row: (i64,) = sqlx::query_as("insert into ticket (name) values ($1) returning id")
-        .bind("a new ticket")
-        .fetch_one(&pool)
-        .await?;
+    client.batch_execute(
+        "
+        CREATE TABLE IF NOT EXISTS author (
+            id              SERIAL PRIMARY KEY,
+            name            VARCHAR NOT NULL,
+            country         VARCHAR NOT NULL
+            )
+    ",
+    )?;
 
-    // 4) Select all tickets
-    let rows = sqlx::query("SELECT * FROM ticket").fetch_all(&pool).await?;
-    let str_result = rows
-        .iter()
-        .map(|r| format!("{} - {}", r.get::<i64, _>("id"), r.get::<String, _>("name")))
-        .collect::<Vec<String>>()
-        .join(", ");
-    println!("\n== select tickets with PgRows:\n{}", str_result);
+    client.batch_execute(
+        "
+        CREATE TABLE IF NOT EXISTS book  (
+            id              SERIAL PRIMARY KEY,
+            title           VARCHAR NOT NULL,
+            author_id       INTEGER NOT NULL REFERENCES author
+            )
+    ",
+    )?;
 
-    // 5) Select query with map() (build the Ticket manually)
-    let select_query = sqlx::query("SELECT id, name FROM ticket");
-    let tickets: Vec<Ticket> = select_query
-        .map(|row: PgRow| Ticket {
-            id: row.get("id"),
-            name: row.get("name"),
-        })
-        .fetch_all(&pool)
-        .await?;
-    println!("\n=== select tickets with query.map...:\n{:?}", tickets);
+    let mut authors = HashMap::new();
+    authors.insert(String::from("Chinua Achebe"), "Nigeria");
+    authors.insert(String::from("Rabindranath Tagore"), "India");
+    authors.insert(String::from("Anita Nair"), "India");
 
-    // 6) Select query_as (using derive FromRow)
-    let select_query = sqlx::query_as::<_, Ticket>("SELECT id, name FROM ticket");
-    let tickets: Vec<Ticket> = select_query.fetch_all(&pool).await?;
-    println!("\n=== select tickets with query.map...: \n{:?}", tickets);
+    for (key, value) in &authors {
+        let author = Author {
+            _id: 0,
+            name: key.to_string(),
+            country: value.to_string(),
+        };
+
+        client.execute(
+            "INSERT INTO author (name, country) VALUES ($1, $2)",
+            &[&author.name, &author.country],
+        )?;
+    }
+
+    for row in client.query("SELECT id, name, country FROM author", &[])? {
+        let author = Author {
+            _id: row.get(0),
+            name: row.get(1),
+            country: row.get(2),
+        };
+        println!("Author {} is from {}", author.name, author.country);
+    }
+
+    // for row in client.query(
+    //     "SELECT nationality, COUNT(nationality) AS count
+    // FROM artists GROUP BY nationality ORDER BY count DESC",
+    //     &[],
+    // )? {
+    //     let (nationality, count): (Option<String>, Option<i64>) = (row.get(0), row.get(1));
+
+    //     if nationality.is_some() && count.is_some() {
+    //         let nation = Nation {
+    //             nationality: nationality.unwrap(),
+    //             count: count.unwrap(),
+    //         };
+    //         println!("{} {}", nation.nationality, nation.count);
+    //     }
+    // }
 
     Ok(())
 }
